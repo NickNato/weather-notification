@@ -1,104 +1,125 @@
 import 'package:flutter/material.dart';
-import 'dart:convert';
-import 'package:http/http.dart' as http;
-
-Future<Map<String, dynamic>> buscarClima() async {
-  final url = Uri.parse("http://192.168.1.10:5000/clima/SP/");
-
-  final resp = await http.get(url);
-
-  if (resp.statusCode == 200) {
-    final lista = jsonDecode(resp.body); // vem lista
-
-    if (lista is List && lista.isNotEmpty) {
-      return lista.first; // pega só o primeiro registro
-    } else {
-      throw Exception("Lista vazia ou inválida");
-    }
-  } else {
-    throw Exception("Erro ao buscar clima: ${resp.statusCode}");
-  }
-}
 
 void main() {
   runApp(const MyApp());
 }
 
+// Mock de registros de clima recebidos do backend (ordene por data, mais antigo primeiro)
+List<Map<String, dynamic>> getRegistrosClimaMock() => [
+  {
+    'condicao': 'Sol',
+    'temperatura': 25,
+    'umidade': 40,
+    'data': '2025-11-12 07:00'
+  },
+  {
+    'condicao': 'Chuva',
+    'temperatura': 34,
+    'umidade': 80,
+    'data': '2025-11-12 09:00'
+  },
+  {
+    'condicao': 'Nublado',
+    'temperatura': 29,
+    'umidade': 55,
+    'data': '2025-11-12 10:00'
+  }
+];
 
+// == Funções de negócio ==
+Map<String, dynamic>? acharExtrapolado(
+    List<Map<String, dynamic>> registros, List<int> limites) {
+  if (registros.length < 2 || limites.isEmpty) return null;
 
-int calcularMaiorVariacao(List<dynamic> lista) {
-  if (lista.length < 2) return 0;
+  final tempPrimeiro = registros.first['temperatura'] as int;
 
-  // extrai só as temperaturas
-  List<int> temps = lista.map<int>((e) => e['temperatura'] as int).toList();
-
-  int menor = temps.reduce((a, b) => a < b ? a : b);
-  int maior = temps.reduce((a, b) => a > b ? a : b);
-
-  return (maior - menor).abs();
+  for (int i = 1; i < registros.length; i++) {
+    final tempAtual = registros[i]['temperatura'] as int;
+    final variacao = (tempPrimeiro - tempAtual).abs();
+    for (final limite in limites) {
+      if (variacao > limite) {
+        return registros[i]; // retorna só o primeiro que extrapolar
+      }
+    }
+  }
+  return null;
 }
 
+void mostrarModalExtrapolacao(BuildContext context, Map<String, dynamic> registro) {
+  showDialog(
+    context: context,
+    builder: (_) => AlertDialog(
+      title: const Text('Variação Extrapolada!'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text("Condição: ${registro['condicao']}"),
+          Text("Temperatura: ${registro['temperatura']}°C"),
+          Text("Umidade: ${registro['umidade']}%"),
+          Text("Data: ${registro['data']}"),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text("OK"),
+        ),
+      ],
+    ),
+  );
+}
 
+void checarEAlertar(BuildContext context, List<Map<String, dynamic>> registros, List<int> limites) {
+  final violador = acharExtrapolado(registros, limites);
+  if (violador != null) {
+    mostrarModalExtrapolacao(context, violador);
+  }
+}
 
+// == App UI ==
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
-
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      title: 'Painel Inicial',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
-        useMaterial3: true,
-      ),
-      home: const MenuInicial(),
-    );
+    return MaterialApp(home: PainelInicial());
   }
 }
 
-// =====================
-// TELA PRINCIPAL
-// =====================
-class MenuInicial extends StatefulWidget {
-  const MenuInicial({super.key});
-
+class PainelInicial extends StatefulWidget {
   @override
-  State<MenuInicial> createState() => _MenuInicialState();
+  State<PainelInicial> createState() => _PainelInicialState();
 }
 
-class _MenuInicialState extends State<MenuInicial> {
+class _PainelInicialState extends State<PainelInicial> {
   List<int> itens = [];
   int valorAtual = 10;
+  List<Map<String, dynamic>> registrosClima = [];
 
-Map<String, dynamic>? clima;
-
-@override
-void initState() {
-  super.initState();
-  carregarClima();
-}
-
-Future<void> carregarClima() async {
-  try {
-    final dados = await buscarClima();
-    setState(() {
-      clima = dados;
-    });
-    
-  } catch (e) {
-    print("Erro: $e");
+  @override
+  void initState() {
+    super.initState();
+    carregarMockClima();
   }
-}
-void removerItem(int index) {
-  setState(() {
-    itens.removeAt(index);
-  });
-}
+
+  void carregarMockClima() {
+    registrosClima = getRegistrosClimaMock();
+    setState(() {});
+    checarEAlertar(context, registrosClima, itens);
+  }
+
   void adicionarItem() {
     setState(() {
       itens.add(valorAtual);
     });
+    checarEAlertar(context, registrosClima, itens);
+  }
+
+  void removerItem(int idx) {
+    setState(() {
+      itens.removeAt(idx);
+    });
+    checarEAlertar(context, registrosClima, itens);
   }
 
   void atualizarValor(int novo) {
@@ -112,29 +133,15 @@ void removerItem(int index) {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.grey[100],
-      appBar: AppBar(
-        backgroundColor: Colors.deepPurple,
-        title: const Text('Menu Inicial', style: TextStyle(color: Colors.white)),
-        centerTitle: true,
-      ),
+      appBar: AppBar(title: const Text("Painel Clima")),
       body: Column(
         children: [
-          Expanded(flex: 2, child: topo(clima)),
-          Expanded(
-            flex: 3,
-            child: Row(
-              children: [
-                Expanded(child: painelEsquerdo(itens, removerItem)),
-                Expanded(
-                  child: painelDireito(
-                    valorAtual,
-                    atualizarValor,
-                    adicionarItem,
-                  ),
-                ),
-              ],
-            ),
+          Expanded(child: topo(registrosClima)),
+          Row(
+            children: [
+              Expanded(child: painelEsquerdo(itens, removerItem)),
+              Expanded(child: painelDireito(valorAtual, atualizarValor, adicionarItem)),
+            ],
           ),
         ],
       ),
@@ -142,192 +149,81 @@ void removerItem(int index) {
   }
 }
 
-// =====================
-// PAINEL SUPERIOR
-// =====================
-Widget topo(Map<String, dynamic>? clima) {
-  if (clima == null) {
+// == Widgets ==
+Widget topo(List<Map<String, dynamic>> registros) {
+  if (registros.isEmpty) {
     return Container(
-      decoration: const BoxDecoration(
-        color: Colors.deepPurple,
-        borderRadius: BorderRadius.vertical(bottom: Radius.circular(16)),
-      ),
-      padding: const EdgeInsets.all(16),
+      color: Colors.deepPurple,
       alignment: Alignment.center,
-      child: const Text(
-        'Carregando clima...',
-        style: TextStyle(
-          fontSize: 24,
-          fontWeight: FontWeight.bold,
-          color: Colors.white,
-        ),
-      ),
+      padding: const EdgeInsets.all(32),
+      child: const Text("Carregando clima...",
+          style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
     );
   }
-
+  final clima = registros.first;
   return Container(
-    decoration: const BoxDecoration(
-      color: Colors.deepPurple,
-      borderRadius: BorderRadius.vertical(bottom: Radius.circular(16)),
-    ),
-    padding: const EdgeInsets.all(16),
-    alignment: Alignment.centerLeft,
+    color: Colors.deepPurple,
+    padding: const EdgeInsets.all(32),
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(
-          'Clima Atual',
-          style: TextStyle(
-            fontSize: 24,
-            fontWeight: FontWeight.bold,
-            color: Colors.white,
-          ),
-        ),
-        const SizedBox(height: 8),
-        Text(
-          "Condição: ${clima['condicao']}",
-          style: const TextStyle(color: Colors.white, fontSize: 16),
-        ),
-        Text(
-          "Temperatura: ${clima['temperatura']}°C",
-          style: const TextStyle(color: Colors.white, fontSize: 16),
-        ),
-        Text(
-          "Umidade: ${clima['umidade']}%",
-          style: const TextStyle(color: Colors.white, fontSize: 16),
-        ),
-        Text(
-          "Data: ${clima['data']}",
-          style: const TextStyle(color: Colors.white, fontSize: 16),
-        ),
+        const Text("Clima Base",
+            style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
+        Text("Condição: ${clima['condicao']}", style: const TextStyle(color: Colors.white)),
+        Text("Temperatura: ${clima['temperatura']}°C", style: const TextStyle(color: Colors.white)),
+        Text("Umidade: ${clima['umidade']}%", style: const TextStyle(color: Colors.white)),
+        Text("Data: ${clima['data']}", style: const TextStyle(color: Colors.white)),
       ],
     ),
   );
 }
 
-
-// =====================
-// PAINEL ESQUERDO
-// =====================
 Widget painelEsquerdo(List<int> itens, Function(int) removerItem) {
   return Container(
     margin: const EdgeInsets.all(8),
     padding: const EdgeInsets.all(12),
     decoration: BoxDecoration(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(12),
-      boxShadow: [
-        BoxShadow(color: Colors.black12, blurRadius: 6, offset: Offset(2, 2))
-      ],
+      color: Colors.white, borderRadius: BorderRadius.circular(12),
     ),
     child: ListView.builder(
       itemCount: itens.length,
-      itemBuilder: (ctx, i) {
-        return itemClima(
-          itens[i],
-          () => removerItem(i), // remove pelo índice
-        );
-      },
+      itemBuilder: (ctx, i) =>
+        ListTile(
+          title: Text("Limite: ${itens[i]}"),
+          trailing: InkWell(
+            child: const Icon(Icons.close, color: Colors.red),
+            onTap: () => removerItem(i),
+          ),
+        ),
     ),
   );
 }
-// =====================
-// PAINEL DIREITO
-// =====================
+
 Widget painelDireito(
-  int valor,
-  Function(int) atualizarValor,
-  Function adicionarItem,
-) {
+  int valor, Function(int) atualizarValor, Function adicionarItem) {
   return Container(
     margin: const EdgeInsets.all(8),
     padding: const EdgeInsets.all(12),
     decoration: BoxDecoration(
-      color: Colors.grey.shade200,
-      borderRadius: BorderRadius.circular(12),
-      boxShadow: [
-        BoxShadow(color: Colors.black12, blurRadius: 6, offset: Offset(-2, 2))
-      ],
+      color: Colors.grey.shade200, borderRadius: BorderRadius.circular(12),
     ),
     child: Column(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        const Text("Valor Selecionado", style: TextStyle(fontSize: 18)),
-        Text(
-          "$valor",
-          style: const TextStyle(fontSize: 32, fontWeight: FontWeight.bold),
-        ),
-
-        const SizedBox(height: 20),
-
+        const Text("Valor Selecionado"),
+        Text("$valor", style: const TextStyle(fontSize: 32, fontWeight: FontWeight.bold)),
         Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            ElevatedButton(
-              onPressed: () => atualizarValor(valor - 1),
-              child: const Text("-1"),
-            ),
+            ElevatedButton(onPressed: () => atualizarValor(valor - 1), child: const Text("-1")),
             const SizedBox(width: 20),
-            ElevatedButton(
-              onPressed: () => atualizarValor(valor + 1),
-              child: const Text("+1"),
-            ),
+            ElevatedButton(onPressed: () => atualizarValor(valor + 1), child: const Text("+1")),
           ],
         ),
-
         const SizedBox(height: 20),
-
         ElevatedButton(
           onPressed: () => adicionarItem(),
           child: const Text("Adicionar no Painel Esquerdo"),
-        ),
-      ],
-    ),
-  );
-}
-
-Widget itemClima(int valor, VoidCallback onRemove) {
-  return Container(
-    margin: const EdgeInsets.only(bottom: 10),
-    padding: const EdgeInsets.all(12),
-    decoration: BoxDecoration(
-      color: Colors.grey.shade100,
-      borderRadius: BorderRadius.circular(12),
-      boxShadow: [
-        BoxShadow(
-          color: Colors.black12,
-          blurRadius: 4,
-          offset: const Offset(1, 1),
-        ),
-      ],
-    ),
-    child: Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Expanded(
-          child: Text(
-            "Clima há Notificar: $valor",
-            style: const TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-        ),
-
-        // Botão de remover (X)
-        InkWell(
-          onTap: onRemove,
-          child: const Padding(
-            padding: EdgeInsets.all(8.0),
-            child: Text(
-              "(x)",
-              style: TextStyle(
-                color: Colors.red,
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ),
         ),
       ],
     ),
